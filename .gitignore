@@ -29,6 +29,11 @@ dist-ssr
 *.local
 .storage/
 
+# Cloudflare
+.wrangler/
+.mf/
+.dev.vars
+
 # Quests
 .quests/
 

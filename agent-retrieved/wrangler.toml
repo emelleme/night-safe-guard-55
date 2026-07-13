@@ -1,0 +1,92 @@
+name = "cseas"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# =============================================================================
+# Cloudflare Pages Configuration
+# =============================================================================
+pages_build_output_dir = "./dist"
+
+# =============================================================================
+# D1 Database Configuration
+# =============================================================================
+[[d1_databases]]
+binding = "DB"
+database_name = "cseas-db"
+database_id = "bda5f0c8-a6b3-4951-b794-0f0b59fc96a4"
+
+# =============================================================================
+# KV Namespaces Configuration (Fast Cache & Storage)
+# =============================================================================
+[[kv_namespaces]]
+binding = "SHORT_URLS"
+id = "9d87d5f38b9c42119c6faca1f5ce7861"
+preview_id = "9d87d5f38b9c42119c6faca1f5ce7861"
+
+[[kv_namespaces]]
+binding = "COLLECTIVE_LEADS"
+id = "cabe5ee776ba4fe6ba370e3208d10711"
+preview_id = "cabe5ee776ba4fe6ba370e3208d10711"
+
+[[kv_namespaces]]
+binding = "SEA_AVATAR_DRAFTS"
+id = "2ba287132a054a6299fb5e77c016ca4f"
+preview_id = "2ba287132a054a6299fb5e77c016ca4f"
+
+[[kv_namespaces]]
+binding = "TREE_SESSIONS"
+id = "acf0f66a36014680a8b54f3865d6bda5"
+preview_id = "acf0f66a36014680a8b54f3865d6bda5"
+
+[[kv_namespaces]]
+binding = "DROP_METADATA"
+id = "7e1f56b0f7ae4bdeb38fbee2dd02771c"
+preview_id = "7e1f56b0f7ae4bdeb38fbee2dd02771c"
+
+[[kv_namespaces]]
+binding = "STAR_CACHE"
+id = "1586833cbab94e8885f730b18d1eabf7"
+preview_id = "1586833cbab94e8885f730b18d1eabf7"
+
+[[kv_namespaces]]
+binding = "CSEAS_PRICE_CACHE"
+id = "9e4dabe0094e4c4d902f755e435a3a76"
+preview_id = "9e4dabe0094e4c4d902f755e435a3a76"
+
+# =============================================================================
+# Environment Variables
+# =============================================================================
+[vars]
+# C-SEAS Token Configuration
+CSEAS_MINT = "92dLaNpWekXPkqiFXKmBgEGjfzZJ5bC79AKeLaqAjXUo"
+CSEAS_PRICE_USD = "0.00006"
+TREASURY_WALLET = "8bfdViBDNQj5XeXm1qzWArYhct7ywioupY66Woxt2xC,FkeigHUMrUMjQuW4RQRYKfd9bTTFixSDxcPZyyWjmiBB,9ib3KQjXE2pm3mWrGSyR4FvAQH9cNY9rDHQAtHnCm2i"
+TREASURY_WALLETS = "8bfdViBDNQj5XeXm1qzWArYhct7ywioupY66Woxt2xC,FkeigHUMrUMjQuW4RQRYKfd9bTTFixSDxcPZyyWjmiBB,9ib3KQjXE2pm3mWrGSyR4FvAQH9cNY9rDHQAtHnCm2i"
+SOLANA_RPC = "https://mainnet.helius-rpc.com/?api-key=92d64653-4629-4356-9ac8-38a15973cc1b"
+SOLANA_RPC_URL = "https://mainnet.helius-rpc.com/?api-key=92d64653-4629-4356-9ac8-38a15973cc1b"
+
+# Meshmint Configuration
+MESHMINT_API = "https://meshmint.currentseas.io/api"
+
+# CurrentSeas Trust Configuration
+CURRENTSEAS_TRUST_WALLET = "YOUR_TRUST_WALLET_ADDRESS_HERE"
+
+# API URLs
+MESHMINT_API_URL = "https://meshmint.currentseas.io/api"
+CSEAS_MINT_API_URL = "https://meshmint.currentseas.io/api/mint"
+
+# R3 Assets Bucket (if needed)
+R3_ASSETS_URL = "https://r3-assets.cseas.dev"
+
+# Production Flags
+# Do not set NODE_ENV here: Cloudflare Pages applies build vars during
+# dependency installation, which would omit devDependencies required for
+# Eleventy/Vite. The npm build script sets NODE_ENV=production itself.
+ENVIRONMENT = "production"
+
+# Development Flags (set to "true" for local testing)
+ENABLE_LOCAL_DB = "false"
+ENABLE_MOCK_SOLANA = "false"
+ENABLE_MOCK_MINTING = "false"
+
+# Analytics, Logpush, and tail sampling are configured in Cloudflare.

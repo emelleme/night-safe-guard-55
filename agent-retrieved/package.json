@@ -1,0 +1,96 @@
+{
+  "name": "tea-stack",
+  "version": "1.0.0",
+  "description": "A starter template for the TEA stack.",
+  "main": "index.js",
+  "scripts": {
+    "build": "NODE_ENV=production npm run clean && NODE_ENV=production npm run build:11ty && NODE_ENV=production npm run build:vite",
+    "build:11ty": "eleventy --quiet",
+    "build:vite": "vite build",
+    "clean": "rm -rf dist",
+    "dev": "NODE_ENV=development run-p dev:11ty dev:vite",
+    "dev:11ty": "eleventy --quiet --serve",
+    "dev:vite": "vite",
+    "dev:pages": "PORT=${PORT:-8788} npx wrangler pages dev dist --compatibility-flags=nodejs_compat --persist-to=.wrangler/state --port $PORT",
+    "gallery:test": "npm run build && npm run dev:pages",
+    "pages:build": "npm install && npm run build",
+    "test:onboard": "node --no-warnings scripts/onboard-smoke.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mattwaler/tea-stack.git"
+  },
+  "prettier": {
+    "semi": false,
+    "singleQuote": true,
+    "tabWidth": 2,
+    "trailingComma": "es5",
+    "htmlWhitespaceSensitivity": "ignore"
+  },
+  "keywords": [
+    "tailwind",
+    "eleventy",
+    "alpine"
+  ],
+  "author": "Matt Waler",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/mattwaler/tea-stack/issues"
+  },
+  "homepage": "https://github.com/mattwaler/tea-stack#readme",
+  "dependencies": {
+    "@barba/core": "^2.10.3",
+    "@libsql/client": "^0.15.15",
+    "@solana-mobile/wallet-standard-mobile": "^0.4.4",
+    "@solana/spl-token": "^0.4.12",
+    "@solana/wallet-adapter-base": "^0.9.27",
+    "@solana/wallet-adapter-phantom": "^0.9.29",
+    "@solana/wallet-adapter-solflare": "^0.6.33",
+    "@solana/wallet-standard-wallet-adapter-base": "^1.1.4",
+    "@solana/web3.js": "^1.98.0",
+    "@types/three": "^0.171.0",
+    "@wallet-standard/app": "^1.1.0",
+    "ably": "^2.23.0",
+    "alpinejs": "^3.1.0",
+    "decimal.js": "^10.6.0",
+    "dotenv": "^17.2.3",
+    "gsap": "^3.12.5",
+    "htmx.org": "^2.0.3",
+    "nanoid": "^5.1.3",
+    "qr-creator": "^1.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "stripe": "^18.5.0",
+    "three": "^0.169.0",
+    "zod": "^3.25.76"
+  },
+  "overrides": {
+    "uuidv4": {
+      "uuid": "^10.0.0"
+    }
+  },
+  "optionalDependencies": {
+    "@esbuild/linux-x64": "0.21.5",
+    "@img/sharp-libvips-linux-x64": "1.0.4",
+    "@img/sharp-linux-x64": "0.33.5",
+    "@rollup/rollup-linux-x64-gnu": "4.60.4"
+  },
+  "devDependencies": {
+    "@11ty/eleventy": "^2.0.1",
+    "@11ty/eleventy-img": "^4.0.2",
+    "@cloudflare/workers-types": "^4.20250809.0",
+    "@factorial/eleventy-plugin-twig": "^0.1.2",
+    "@tailwindcss/forms": "^0.5.2",
+    "@tailwindcss/typography": "^0.5.4",
+    "@types/leaflet": "^1.9.15",
+    "autoprefixer": "^10.4.14",
+    "daisyui": "^4.12.14",
+    "leaflet": "^1.9.4",
+    "npm-run-all": "^4.1.5",
+    "postcss-import": "^16.0.0",
+    "tailwindcss": "^3.1.6",
+    "tailwindcss-debug-screens": "^2.2.1",
+    "twig": "^1.15.4",
+    "vite": "^5.2.14"
+  }
+}

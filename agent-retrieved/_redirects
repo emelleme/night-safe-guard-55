@@ -1,0 +1,4 @@
+# Cloudflare Pages routing rules
+# Gallery deep links (/gallery/painting/triton, /gallery/sculpture/…, /gallery/wearable/…)
+# are client-side routes rendered by the gallery page itself.
+/gallery/* /gallery/ 200

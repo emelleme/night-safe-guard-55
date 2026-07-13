@@ -1,0 +1,12 @@
+# Cloudflare Pages — CardCtrl (static SPA)
+# Mirror pattern from currentseas: pages_build_output_dir + wrangler pages deploy
+
+name = "cardctrl"
+compatibility_date = "2025-01-01"
+
+# =============================================================================
+# Cloudflare Pages Configuration
+# =============================================================================
+pages_build_output_dir = "./dist"
+
+# No D1 / KV / secrets required — NFC + history run entirely in the browser.
