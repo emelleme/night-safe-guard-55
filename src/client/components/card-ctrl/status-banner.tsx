@@ -22,6 +22,12 @@ const styles: Record<
     text: "text-cyan-100",
     dot: "bg-cyan-400 animate-pulse",
   },
+  "barcode-scanning": {
+    ring: "ring-fuchsia-400/30",
+    bg: "bg-fuchsia-500/10",
+    text: "text-fuchsia-100",
+    dot: "bg-fuchsia-300 animate-pulse",
+  },
   writing: {
     ring: "ring-violet-400/30",
     bg: "bg-violet-500/10",
@@ -53,6 +59,7 @@ export function StatusBanner({ status, message, supported }: StatusBannerProps) 
   const show =
     message ||
     status === "scanning" ||
+    status === "barcode-scanning" ||
     status === "writing" ||
     status === "unsupported" ||
     !supported;
@@ -68,10 +75,12 @@ export function StatusBanner({ status, message, supported }: StatusBannerProps) 
       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${s.dot}`} />
       <p className={`text-sm leading-relaxed ${s.text}`}>
         {!supported
-          ? "Web NFC needs Chrome on Android with NFC enabled. You can still draft payloads and build history on this device."
+          ? "Web NFC still needs Chrome on Android with NFC enabled. Barcode scan, image import, and payload drafting can still work here."
           : message ||
             (status === "scanning"
               ? "Hold a card to the back of your phone…"
+              : status === "barcode-scanning"
+                ? "Point the camera at a barcode or QR code…"
               : status === "writing"
                 ? "Ready — tap the card to write…"
                 : "")}

@@ -2,6 +2,7 @@ import {
   displayTitle,
   relativeTime,
 } from "@/client/lib/history";
+import { formatPayloadKind, formatPayloadSource } from "@/client/lib/payload";
 import type { HistoryEntry } from "@/client/lib/nfc-types";
 
 interface HistoryListProps {
@@ -63,8 +64,10 @@ export function HistoryList({
                   className="min-w-0 flex-1 px-4 py-3.5 text-left active:bg-white/5"
                 >
                   <div className="flex items-center gap-2">
-                    <TypePill type={entry.type} />
+                    <TypePill kind={entry.kind || entry.type} />
+                    {entry.source ? <SourcePill source={entry.source} /> : null}
                     <ActionPill action={entry.action} />
+                    {entry.format ? <FormatPill format={entry.format} /> : null}
                     <span className="ml-auto shrink-0 text-[11px] text-slate-500">
                       {relativeTime(entry.createdAt)}
                     </span>
@@ -95,16 +98,30 @@ export function HistoryList({
   );
 }
 
-function TypePill({ type }: { type: HistoryEntry["type"] }) {
+function TypePill({ kind }: { kind: HistoryEntry["kind"] | HistoryEntry["type"] }) {
   return (
     <span
       className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-        type === "url"
+        kind === "url"
           ? "bg-cyan-500/15 text-cyan-300"
-          : "bg-amber-500/15 text-amber-300"
+          : kind === "image"
+            ? "bg-fuchsia-500/15 text-fuchsia-200"
+            : kind === "email" || kind === "phone" || kind === "sms"
+              ? "bg-emerald-500/15 text-emerald-200"
+              : kind === "wifi" || kind === "contact" || kind === "json"
+                ? "bg-violet-500/15 text-violet-200"
+                : "bg-amber-500/15 text-amber-300"
       }`}
     >
-      {type}
+      {formatPayloadKind(kind || "text")}
+    </span>
+  );
+}
+
+function SourcePill({ source }: { source: NonNullable<HistoryEntry["source"]> }) {
+  return (
+    <span className="rounded-md bg-white/5 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400">
+      {formatPayloadSource(source)}
     </span>
   );
 }
@@ -115,6 +132,14 @@ function ActionPill({ action }: { action: HistoryEntry["action"] }) {
   return (
     <span className="rounded-md bg-white/5 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400">
       {label}
+    </span>
+  );
+}
+
+function FormatPill({ format }: { format: string }) {
+  return (
+    <span className="rounded-md bg-white/5 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+      {format}
     </span>
   );
 }

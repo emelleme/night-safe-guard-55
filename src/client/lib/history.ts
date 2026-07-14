@@ -1,4 +1,5 @@
-import type { HistoryEntry, PayloadType } from "./nfc-types";
+import { displayTitle as previewTitle } from "./payload";
+import type { HistoryEntry } from "./nfc-types";
 
 const STORAGE_KEY = "cardctrl.history.v1";
 const MAX_ENTRIES = 40;
@@ -47,6 +48,9 @@ export function addHistoryEntry(
     type: partial.type,
     data: normalized,
     label: partial.label?.trim() || undefined,
+    kind: partial.kind,
+    source: partial.source,
+    format: partial.format,
     action: partial.action,
     createdAt: Date.now(),
   };
@@ -92,21 +96,5 @@ export function relativeTime(ts: number): string {
 }
 
 export function displayTitle(entry: HistoryEntry): string {
-  if (entry.label) return entry.label;
-  if (entry.type === "url") {
-    try {
-      const u = new URL(entry.data);
-      const path = u.pathname === "/" ? "" : u.pathname;
-      return `${u.host}${path}${u.search}`;
-    } catch {
-      return entry.data;
-    }
-  }
-  return entry.data.length > 48 ? `${entry.data.slice(0, 48)}…` : entry.data;
-}
-
-export function guessType(value: string): PayloadType {
-  const v = value.trim();
-  if (/^https?:\/\//i.test(v)) return "url";
-  return "text";
+  return previewTitle(entry);
 }

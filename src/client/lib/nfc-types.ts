@@ -20,6 +20,7 @@ export interface NDEFRecord {
   readonly data?: DataView;
   readonly encoding?: string;
   readonly lang?: string;
+  toRecords?: () => readonly NDEFRecord[];
 }
 
 export interface NDEFMessage {
@@ -53,10 +54,59 @@ declare global {
 
 export type PayloadType = "url" | "text";
 
+export type PayloadSource =
+  | "manual"
+  | "history"
+  | "generate"
+  | "nfc"
+  | "barcode";
+
+export type PayloadKind =
+  | "url"
+  | "image"
+  | "text"
+  | "email"
+  | "phone"
+  | "sms"
+  | "location"
+  | "wifi"
+  | "contact"
+  | "json";
+
+export interface PayloadField {
+  label: string;
+  value: string;
+}
+
+export interface PayloadAction {
+  href: string;
+  label: string;
+}
+
+export interface PayloadPreviewModel {
+  kind: PayloadKind;
+  title: string;
+  subtitle?: string;
+  body?: string;
+  imageSrc?: string;
+  imageAlt?: string;
+  fields?: PayloadField[];
+  actions?: PayloadAction[];
+  sourceLabel?: string;
+  formatLabel?: string;
+  hint?: string;
+}
+
 export interface CardPayload {
   type: PayloadType;
   data: string;
   label?: string;
+  kind?: PayloadKind;
+  source?: PayloadSource;
+  format?: string;
+  mimeType?: string;
+  recordType?: string;
+  serialNumber?: string;
 }
 
 export interface HistoryEntry {
@@ -64,6 +114,9 @@ export interface HistoryEntry {
   type: PayloadType;
   data: string;
   label?: string;
+  kind?: PayloadKind;
+  source?: PayloadSource;
+  format?: string;
   action: "write" | "scan" | "generate";
   createdAt: number;
 }
@@ -71,6 +124,7 @@ export interface HistoryEntry {
 export type NfcStatus =
   | "idle"
   | "scanning"
+  | "barcode-scanning"
   | "writing"
   | "success"
   | "error"

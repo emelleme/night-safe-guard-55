@@ -4,6 +4,7 @@ import type {
   NDEFReadingEvent,
   NDEFRecord,
 } from "./nfc-types";
+import { guessType } from "./payload";
 
 export function isNfcSupported(): boolean {
   return typeof window !== "undefined" && "NDEFReader" in window;
@@ -17,24 +18,59 @@ export function createNdefReader(): NDEFReader {
 }
 
 export function decodeRecord(record: NDEFRecord): CardPayload {
-  if (record.recordType === "url") {
-    const data = decodeText(record);
-    return { type: "url", data };
+  if (
+    record.recordType === "smart-poster" &&
+    typeof record.toRecords === "function"
+  ) {
+    const nested = decodeRecords(record.toRecords());
+    if (nested) {
+      return {
+        ...nested,
+        recordType: record.recordType,
+      };
+    }
   }
 
-  if (record.recordType === "text" || record.recordType === "mime") {
+  if (record.recordType === "url" || record.recordType === "absolute-url") {
     const data = decodeText(record);
-    return { type: "text", data };
+    return {
+      type: guessType(data),
+      data,
+      kind: /^data:image\//i.test(data) ? "image" : undefined,
+      recordType: record.recordType,
+    };
   }
 
-  // Absolute URL records sometimes appear as empty recordType with media
+  if (record.recordType === "text") {
+    const data = decodeText(record);
+    return {
+      type: guessType(data),
+      data,
+      recordType: record.recordType,
+    };
+  }
+
+  if (record.recordType === "mime") {
+    return decodeMimeRecord(record);
+  }
+
   if (record.mediaType?.startsWith("text/")) {
-    return { type: "text", data: decodeText(record) };
+    const data = decodeText(record);
+    return {
+      type: guessType(data),
+      data,
+      recordType: record.recordType,
+      mimeType: record.mediaType,
+    };
   }
 
   const data = decodeText(record);
   const looksLikeUrl = /^https?:\/\//i.test(data);
-  return { type: looksLikeUrl ? "url" : "text", data };
+  return {
+    type: looksLikeUrl ? "url" : "text",
+    data,
+    recordType: record.recordType,
+  };
 }
 
 function decodeText(record: NDEFRecord): string {
@@ -45,6 +81,86 @@ function decodeText(record: NDEFRecord): string {
   } catch {
     return new TextDecoder().decode(record.data);
   }
+}
+
+function decodeRecords(records: readonly NDEFRecord[]): CardPayload | null {
+  const ranked = [...records].sort(compareRecordPriority);
+  for (const record of ranked) {
+    const payload = decodeRecord(record);
+    if (payload.data) return payload;
+  }
+  return null;
+}
+
+function compareRecordPriority(a: NDEFRecord, b: NDEFRecord): number {
+  return getRecordPriority(a) - getRecordPriority(b);
+}
+
+function getRecordPriority(record: NDEFRecord): number {
+  if (record.recordType === "smart-poster") return 0;
+  if (record.recordType === "url" || record.recordType === "absolute-url") {
+    return 1;
+  }
+  if (record.recordType === "text") return 2;
+  if (record.recordType === "mime" && record.mediaType?.startsWith("image/")) {
+    return 3;
+  }
+  if (record.recordType === "mime") return 4;
+  return 5;
+}
+
+function decodeMimeRecord(record: NDEFRecord): CardPayload {
+  const mediaType = record.mediaType || "application/octet-stream";
+  const data = decodeText(record);
+
+  if (mediaType.startsWith("image/")) {
+    return {
+      type: "text",
+      data: bytesToDataUrl(record.data, mediaType),
+      kind: "image",
+      mimeType: mediaType,
+      recordType: record.recordType,
+    };
+  }
+
+  if (isTextMediaType(mediaType)) {
+    return {
+      type: guessType(data),
+      data,
+      mimeType: mediaType,
+      recordType: record.recordType,
+    };
+  }
+
+  return {
+    type: "text",
+    data: bytesToDataUrl(record.data, mediaType),
+    mimeType: mediaType,
+    recordType: record.recordType,
+  };
+}
+
+function isTextMediaType(mediaType: string): boolean {
+  return (
+    mediaType.startsWith("text/") ||
+    /json$/i.test(mediaType) ||
+    /xml$/i.test(mediaType) ||
+    /vcard/i.test(mediaType)
+  );
+}
+
+function bytesToDataUrl(data: DataView | undefined, mediaType: string): string {
+  if (!data) return "";
+
+  const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  let binary = "";
+
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    const chunk = bytes.subarray(index, index + 0x8000);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return `data:${mediaType};base64,${btoa(binary)}`;
 }
 
 export async function scanCard(
@@ -77,14 +193,20 @@ export async function scanCard(
 
     ndef.onreading = (event: NDEFReadingEvent) => {
       try {
-        const record = event.message.records[0];
-        if (!record) {
+        const payload = decodeRecords(event.message.records);
+        if (!payload) {
           reject(new Error("Empty NFC tag — no NDEF records found."));
           cleanup();
           return;
         }
-        const payload = decodeRecord(record);
-        onRead(payload, event.serialNumber);
+        onRead(
+          {
+            ...payload,
+            source: "nfc",
+            serialNumber: event.serialNumber || undefined,
+          },
+          event.serialNumber,
+        );
         cleanup();
         resolve();
       } catch (err) {

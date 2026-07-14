@@ -9,7 +9,7 @@ Built with React + Vite + Tailwind. Fully client-side (Web NFC API + `localStora
 - Write URL or text NDEF records to NFC tags
 - Scan tags into the editor for rewrite
 - Local history for one-tap reuse
-- Generate short codes (`https://red.viim.dev/…`)
+- Generate short codes (`https://cardctrl.pages.dev/…`)
 - Mobile UX: sticky action bar, haptics, tones, safe-area padding
 
 > **NFC note:** Web NFC works on **Chrome for Android** with NFC enabled (HTTPS). Other browsers show “No NFC” but still support drafting + history.
