@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "pages:build": "pnpm install && pnpm run build",
     "pages:dev": "wrangler pages dev dist",
-    "deploy": "pnpm run build && wrangler pages deploy dist --project-name=cardctrl",
+    "deploy": "pnpm run build && wrangler pages deploy dist --project-name=cardctrl --branch=main",
     "deploy:preview": "pnpm run build && wrangler pages deploy dist --project-name=cardctrl --branch=preview"
   },
   "dependencies": {
