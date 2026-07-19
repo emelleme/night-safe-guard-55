@@ -1,9 +1,10 @@
 # Security + caching for CardCtrl on Cloudflare Pages
+# nfc=(self) is required so Chrome Android does not block Web NFC via Permissions-Policy
 
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
-  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=()
+  Permissions-Policy: nfc=(self), camera=(self), accelerometer=(), geolocation=(), gyroscope=(), microphone=()
   X-Frame-Options: DENY
 
 # Hashed Vite assets — long cache

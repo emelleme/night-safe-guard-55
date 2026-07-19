@@ -21,8 +21,10 @@ import {
   type BarcodeScannerSession,
 } from "@/client/lib/barcode";
 import {
+  abortNfcOperations,
   formatNfcError,
   generateShortCode,
+  getNfcEnvironment,
   isNfcSupported,
   playTone,
   scanCard,
@@ -48,7 +50,8 @@ const EMPTY_DRAFT: CardPayload = {
 };
 
 export function CardCtrlApp() {
-  const nfcSupported = useMemo(() => isNfcSupported(), []);
+  const nfcEnv = useMemo(() => getNfcEnvironment(), []);
+  const nfcSupported = nfcEnv.supported;
   const cameraSupported = useMemo(() => isBarcodeSupported(), []);
   const barcodeFormats = useMemo(() => supportedBarcodeLabels().join(" • "), []);
 
@@ -58,7 +61,9 @@ export function CardCtrlApp() {
   const [status, setStatus] = useState<NfcStatus>(
     nfcSupported ? "idle" : "unsupported",
   );
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(() =>
+    nfcSupported ? "" : nfcEnv.reason || "",
+  );
   const [scannerOpen, setScannerOpen] = useState(false);
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [torchEnabled, setTorchEnabled] = useState(false);
@@ -67,6 +72,11 @@ export function CardCtrlApp() {
   const barcodeSessionRef = useRef<BarcodeScannerSession | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  /** Keeps the latest write payload so the click handler stays gesture-safe. */
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  /** Bumps on each NFC action so stale promises cannot clobber UI state. */
+  const nfcGenerationRef = useRef(0);
 
   useEffect(() => {
     setHistory(loadHistory());
@@ -82,6 +92,7 @@ export function CardCtrlApp() {
   const cancelPending = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    abortNfcOperations();
     stopBarcodeSession();
   }, [stopBarcodeSession]);
 
@@ -216,120 +227,137 @@ export function CardCtrlApp() {
     vibrate(20);
   };
 
-  const handleWrite = async () => {
-    if (!nfcSupported) {
+  const handleWrite = () => {
+    // IMPORTANT: call writeCard in the same turn as the click (user activation).
+    // Avoid awaits / long work before NDEFReader.write on Chrome Android.
+    if (!isNfcSupported()) {
+      const env = getNfcEnvironment();
       setFeedback(
         "unsupported",
-        "Writing needs Chrome on Android with NFC enabled.",
+        env.reason || "Writing needs Chrome on Android with NFC enabled.",
       );
       return;
     }
 
-    const trimmed = draft.data.trim();
+    const current = draftRef.current;
+    const trimmed = current.data.trim();
     if (!trimmed) {
       setFeedback("error", "Add a URL or text payload before writing.");
       playTone("error");
       return;
     }
 
-    cancelPending();
+    // Stop barcode camera only — do not delay before write()
+    stopBarcodeSession();
     setScannerOpen(false);
 
+    abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    const generation = ++nfcGenerationRef.current;
 
-    setFeedback("writing", "Hold a blank or rewritable card to your phone…");
-    vibrate(15);
+    setFeedback(
+      "writing",
+      "Ready to write — hold the card flat on the NFC spot (often near the camera)…",
+    );
 
-    try {
-      await writeCard(
-        {
-          type: draft.type,
-          data: trimmed,
-          label: draft.label,
-        },
-        { signal: controller.signal },
-      );
+    const payload = {
+      type: current.type,
+      data: trimmed,
+      label: current.label,
+    };
 
-      applyPayload(
-        {
-          ...draft,
-          data: trimmed,
-        },
-        {
-          action: "write",
-          message: "Card written. You’re good to go.",
-        },
-      );
-
-      playTone("success");
-      vibrate([20, 40, 30]);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        setFeedback("idle", "Write cancelled.");
-        return;
-      }
-
-      setFeedback("error", formatNfcError(error));
-      playTone("error");
-      vibrate([40, 40, 40]);
-    } finally {
-      abortRef.current = null;
-    }
+    // Fire write immediately under the user gesture
+    void writeCard(payload, { signal: controller.signal })
+      .then(() => {
+        if (nfcGenerationRef.current !== generation) return;
+        applyPayload(
+          {
+            ...current,
+            data: trimmed,
+          },
+          {
+            action: "write",
+            message: "Card written. You’re good to go.",
+          },
+        );
+        playTone("success");
+        vibrate([20, 40, 30]);
+      })
+      .catch((error: unknown) => {
+        if (nfcGenerationRef.current !== generation) return;
+        if (error instanceof DOMException && error.name === "AbortError") {
+          setFeedback("idle", "Write cancelled.");
+          return;
+        }
+        setFeedback("error", formatNfcError(error));
+        playTone("error");
+        vibrate([40, 40, 40]);
+      })
+      .finally(() => {
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+        }
+      });
   };
 
-  const handleNfcScan = async () => {
-    if (!nfcSupported) {
+  const handleNfcScan = () => {
+    if (!isNfcSupported()) {
+      const env = getNfcEnvironment();
       setFeedback(
         "unsupported",
-        "NFC scan needs Chrome on Android with NFC enabled.",
+        env.reason || "NFC scan needs Chrome on Android with NFC enabled.",
       );
       return;
     }
 
-    cancelPending();
+    stopBarcodeSession();
     setScannerOpen(false);
 
+    abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    const generation = ++nfcGenerationRef.current;
 
     setFeedback("scanning", "Hold a card to the back of your phone…");
-    vibrate(15);
 
-    try {
-      await scanCard(
-        (payload) => {
-          const scanned = {
-            ...payload,
-            label: payload.label || undefined,
-            source: "nfc" as const,
-          };
+    void scanCard(
+      (payload) => {
+        if (nfcGenerationRef.current !== generation) return;
+        const scanned = {
+          ...payload,
+          label: payload.label || undefined,
+          source: "nfc" as const,
+        };
 
-          applyPayload(scanned, {
-            action: "scan",
-            message:
-              scanned.kind === "image"
-                ? "NFC image payload loaded for preview."
-                : "Card scanned into the editor.",
-          });
+        applyPayload(scanned, {
+          action: "scan",
+          message:
+            scanned.kind === "image"
+              ? "NFC image payload loaded for preview."
+              : "Card scanned into the editor.",
+        });
 
-          playTone("scan");
-          vibrate([15, 30, 15]);
-        },
-        { signal: controller.signal },
-      );
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        setFeedback("idle", "Scan cancelled.");
-        return;
-      }
-
-      setFeedback("error", formatNfcError(error));
-      playTone("error");
-      vibrate([40, 40, 40]);
-    } finally {
-      abortRef.current = null;
-    }
+        playTone("scan");
+        vibrate([15, 30, 15]);
+      },
+      { signal: controller.signal },
+    )
+      .catch((error: unknown) => {
+        if (nfcGenerationRef.current !== generation) return;
+        if (error instanceof DOMException && error.name === "AbortError") {
+          setFeedback("idle", "Scan cancelled.");
+          return;
+        }
+        setFeedback("error", formatNfcError(error));
+        playTone("error");
+        vibrate([40, 40, 40]);
+      })
+      .finally(() => {
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+        }
+      });
   };
 
   const handleBarcodeScan = () => {
@@ -371,6 +399,7 @@ export function CardCtrlApp() {
   };
 
   const handleCancel = () => {
+    nfcGenerationRef.current += 1;
     cancelPending();
     setScannerOpen(false);
     setFeedback("idle", "Cancelled.");
@@ -719,7 +748,9 @@ export function CardCtrlApp() {
           <p className="mx-auto mt-2 max-w-lg text-center text-xs text-slate-400">
             {status === "barcode-scanning"
               ? "Keep the code inside the frame or choose an image to decode."
-              : "Keep the card against the NFC spot until you feel the buzz."}
+              : status === "writing"
+                ? "Allow NFC if prompted, then hold the tag still for ~2s. Cancel and retry if it stalls."
+                : "Keep the card against the NFC spot until you feel the buzz."}
           </p>
         ) : null}
       </div>

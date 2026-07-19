@@ -1,20 +1,178 @@
 import type {
   CardPayload,
+  NDEFMessageInit,
   NDEFReader,
   NDEFReadingEvent,
   NDEFRecord,
+  NDEFRecordInit,
 } from "./nfc-types";
 import { guessType } from "./payload";
 
+/** Only one NFC op at a time — Chrome Android gets flaky if scan/write overlap. */
+let activeController: AbortController | null = null;
+
+export type NfcEnvironment = {
+  supported: boolean;
+  secureContext: boolean;
+  topLevel: boolean;
+  visible: boolean;
+  reason?: string;
+};
+
+export function getNfcEnvironment(): NfcEnvironment {
+  if (typeof window === "undefined") {
+    return {
+      supported: false,
+      secureContext: false,
+      topLevel: false,
+      visible: false,
+      reason: "Not running in a browser.",
+    };
+  }
+
+  const secureContext = window.isSecureContext === true;
+  const topLevel = window.top === window.self;
+  const visible =
+    typeof document === "undefined" ? true : document.visibilityState === "visible";
+  const hasApi = "NDEFReader" in window;
+
+  if (!hasApi) {
+    return {
+      supported: false,
+      secureContext,
+      topLevel,
+      visible,
+      reason:
+        "Web NFC needs Chrome on Android (or Edge Android) with NFC hardware.",
+    };
+  }
+  if (!secureContext) {
+    return {
+      supported: false,
+      secureContext,
+      topLevel,
+      visible,
+      reason: "Web NFC requires HTTPS (or localhost).",
+    };
+  }
+  if (!topLevel) {
+    return {
+      supported: false,
+      secureContext,
+      topLevel,
+      visible,
+      reason:
+        "Web NFC only works in the top-level page — open this site outside an iframe.",
+    };
+  }
+
+  return { supported: true, secureContext, topLevel, visible };
+}
+
 export function isNfcSupported(): boolean {
-  return typeof window !== "undefined" && "NDEFReader" in window;
+  return getNfcEnvironment().supported;
 }
 
 export function createNdefReader(): NDEFReader {
+  const env = getNfcEnvironment();
+  if (!env.supported) {
+    throw new Error(env.reason || "Web NFC is not available.");
+  }
   if (!window.NDEFReader) {
     throw new Error("Web NFC is not supported on this device or browser.");
   }
   return new window.NDEFReader();
+}
+
+/** Cancel any in-flight scan/write so the adapter is free. */
+export function abortNfcOperations(): void {
+  try {
+    activeController?.abort();
+  } catch {
+    // ignore
+  }
+  activeController = null;
+}
+
+function beginOperation(external?: AbortSignal): AbortController {
+  // Abort previous op synchronously so the radio is free before write/scan
+  abortNfcOperations();
+
+  const controller = new AbortController();
+  activeController = controller;
+
+  if (external) {
+    if (external.aborted) {
+      controller.abort();
+    } else {
+      const onExternalAbort = () => controller.abort();
+      external.addEventListener("abort", onExternalAbort, { once: true });
+      controller.signal.addEventListener(
+        "abort",
+        () => external.removeEventListener("abort", onExternalAbort),
+        { once: true },
+      );
+    }
+  }
+
+  return controller;
+}
+
+function endOperation(controller: AbortController): void {
+  if (activeController === controller) {
+    activeController = null;
+  }
+}
+
+export function buildNdefMessage(payload: CardPayload): NDEFMessageInit {
+  const data = payload.data.trim();
+  if (!data) {
+    throw new Error("Nothing to write — add a URL or text first.");
+  }
+
+  if (payload.type === "url") {
+    const url = normalizeUrl(data);
+    if (!url) {
+      throw new Error("Enter a valid URL (include https://).");
+    }
+    return {
+      records: [{ recordType: "url", data: url }],
+    };
+  }
+
+  // Plain text NDEF — encoding + lang required by the Web NFC text record format
+  const record: NDEFRecordInit = {
+    recordType: "text",
+    data,
+    encoding: "utf-8",
+    lang: "en",
+  };
+  return { records: [record] };
+}
+
+/** Accept bare domains users often type on mobile. */
+function normalizeUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const candidates = [trimmed];
+  if (!/^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(trimmed)) {
+    candidates.push(`https://${trimmed}`);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const url = new URL(candidate);
+      if (url.protocol === "http:" || url.protocol === "https:") {
+        return url.href;
+      }
+      // tel:, mailto:, sms: etc. — write as text, not url record
+      return null;
+    } catch {
+      // try next
+    }
+  }
+  return null;
 }
 
 export function decodeRecord(record: NDEFRecord): CardPayload {
@@ -84,6 +242,7 @@ function decodeText(record: NDEFRecord): string {
 }
 
 function decodeRecords(records: readonly NDEFRecord[]): CardPayload | null {
+  if (!records.length) return null;
   const ranked = [...records].sort(compareRecordPriority);
   for (const record of ranked) {
     const payload = decodeRecord(record);
@@ -167,98 +326,205 @@ export async function scanCard(
   onRead: (payload: CardPayload, serialNumber: string) => void,
   options?: { signal?: AbortSignal },
 ): Promise<void> {
-  const ndef = createNdefReader();
+  const controller = beginOperation(options?.signal);
+  const { signal } = controller;
 
-  await new Promise<void>((resolve, reject) => {
-    const signal = options?.signal;
+  try {
+    assertDocumentReadyForNfc();
+    const ndef = createNdefReader();
 
-    const cleanup = () => {
-      ndef.onreading = null;
-      ndef.onreadingerror = null;
-      signal?.removeEventListener("abort", onAbort);
-    };
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
 
-    const onAbort = () => {
-      cleanup();
-      reject(new DOMException("Scan cancelled", "AbortError"));
-    };
+      const cleanup = () => {
+        ndef.onreading = null;
+        ndef.onreadingerror = null;
+        signal.removeEventListener("abort", onAbort);
+      };
 
-    if (signal) {
+      const settle = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn();
+      };
+
+      const onAbort = () => {
+        settle(() =>
+          reject(new DOMException("Scan cancelled", "AbortError")),
+        );
+      };
+
       if (signal.aborted) {
         onAbort();
         return;
       }
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
+      signal.addEventListener("abort", onAbort);
 
-    ndef.onreading = (event: NDEFReadingEvent) => {
-      try {
-        const payload = decodeRecords(event.message.records);
-        if (!payload) {
-          reject(new Error("Empty NFC tag — no NDEF records found."));
-          cleanup();
-          return;
+      ndef.onreading = (event: NDEFReadingEvent) => {
+        try {
+          const payload = decodeRecords(event.message.records);
+          if (!payload) {
+            settle(() =>
+              reject(new Error("Empty NFC tag — no NDEF records found.")),
+            );
+            return;
+          }
+          onRead(
+            {
+              ...payload,
+              source: "nfc",
+              serialNumber: event.serialNumber || undefined,
+            },
+            event.serialNumber,
+          );
+          settle(() => resolve());
+        } catch (err) {
+          settle(() => reject(err));
         }
-        onRead(
-          {
-            ...payload,
-            source: "nfc",
-            serialNumber: event.serialNumber || undefined,
-          },
-          event.serialNumber,
+      };
+
+      ndef.onreadingerror = () => {
+        settle(() =>
+          reject(
+            new Error("Could not read this tag. Hold steady and try again."),
+          ),
         );
-        cleanup();
-        resolve();
-      } catch (err) {
-        cleanup();
-        reject(err);
-      }
-    };
+      };
 
-    ndef.onreadingerror = () => {
-      cleanup();
-      reject(new Error("Could not read this tag. Try again."));
-    };
-
-    ndef.scan({ signal }).catch((err) => {
-      cleanup();
-      reject(err);
+      // Must stay in the user-gesture call stack → call scan immediately
+      ndef.scan({ signal }).catch((err) => {
+        settle(() => reject(err));
+      });
     });
-  });
+  } finally {
+    endOperation(controller);
+  }
 }
 
+/**
+ * Write NDEF to the next tag the user taps.
+ *
+ * Chrome Android path (call this synchronously from a click handler):
+ * 1) Prefer direct `ndef.write()` — waits for tag under the user gesture.
+ * 2) If the adapter is busy / InvalidState, fall back to scan→write on reading.
+ */
 export async function writeCard(
   payload: CardPayload,
   options?: { signal?: AbortSignal },
 ): Promise<void> {
-  const ndef = createNdefReader();
-  const data = payload.data.trim();
+  // Build message first (sync) so write() still runs under the gesture
+  const message = buildNdefMessage(payload);
 
-  if (!data) {
-    throw new Error("Nothing to write — add a URL or text first.");
+  const controller = beginOperation(options?.signal);
+  const { signal } = controller;
+
+  try {
+    assertDocumentReadyForNfc();
+    const ndef = createNdefReader();
+
+    try {
+      await ndef.write(message, {
+        overwrite: true,
+        signal,
+      });
+      return;
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+
+      // Adapter still held, or some OEM stacks dislike bare write — try write-on-tap
+      if (isRetryableWriteError(err)) {
+        await writeViaScan(ndef, message, signal);
+        return;
+      }
+      throw err;
+    }
+  } finally {
+    endOperation(controller);
   }
-
-  if (payload.type === "url" && !isValidUrl(data)) {
-    throw new Error("Enter a valid URL (include https://).");
-  }
-
-  const recordType = payload.type === "url" ? "url" : "text";
-
-  await ndef.write(
-    {
-      records: [{ recordType, data }],
-    },
-    { signal: options?.signal, overwrite: true },
-  );
 }
 
-function isValidUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
+/**
+ * Most reliable overwrite path on finicky Android devices:
+ * scan for a tag (user already gestured), then write in the reading handler.
+ */
+function writeViaScan(
+  ndef: NDEFReader,
+  message: NDEFMessageInit,
+  signal: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let writing = false;
+
+    const cleanup = () => {
+      ndef.onreading = null;
+      ndef.onreadingerror = null;
+      signal.removeEventListener("abort", onAbort);
+    };
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+
+    const onAbort = () => {
+      settle(() => reject(new DOMException("Write cancelled", "AbortError")));
+    };
+
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort);
+
+    ndef.onreading = () => {
+      if (writing || settled) return;
+      writing = true;
+      // Fire write immediately while the tag is still in the field
+      ndef
+        .write(message, { overwrite: true, signal })
+        .then(() => settle(() => resolve()))
+        .catch((err) => settle(() => reject(err)));
+    };
+
+    ndef.onreadingerror = () => {
+      if (writing) return;
+      settle(() =>
+        reject(
+          new Error("Could not lock onto the tag. Hold it still against the phone."),
+        ),
+      );
+    };
+
+    ndef.scan({ signal }).catch((err) => {
+      if (writing) return;
+      settle(() => reject(err));
+    });
+  });
+}
+
+function assertDocumentReadyForNfc(): void {
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+    throw new Error(
+      "Screen is locked or the tab is in the background. Keep Chrome open and unlocked.",
+    );
   }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function isRetryableWriteError(error: unknown): boolean {
+  if (!(error instanceof DOMException)) return false;
+  return (
+    error.name === "InvalidStateError" ||
+    error.name === "NotReadableError" ||
+    /already|progress|scan/i.test(error.message)
+  );
 }
 
 export function generateShortCode(length = 8): string {
@@ -313,7 +579,6 @@ export function playTone(
       osc.stop(now + 0.35);
     }
 
-    // Close context after tone finishes to free resources
     setTimeout(() => void ctx.close(), 500);
   } catch {
     // Audio optional
@@ -330,21 +595,27 @@ export function vibrate(pattern: number | number[] = 40): void {
 
 export function formatNfcError(error: unknown): string {
   if (error instanceof DOMException) {
-    if (error.name === "AbortError") return "Cancelled.";
-    if (error.name === "NotAllowedError") {
-      return "NFC permission denied. Allow NFC access and try again.";
+    switch (error.name) {
+      case "AbortError":
+        return "Cancelled.";
+      case "NotAllowedError":
+        return "NFC blocked. Tap Allow on the permission prompt, use Chrome (not an in-app browser), keep the screen on, and try again.";
+      case "NotSupportedError":
+        return "This tag or device doesn’t support NDEF write. Try a different NTAG/MIFARE Ultralight card.";
+      case "NotReadableError":
+        return "Couldn’t read/write the tag. Hold it still on the NFC spot (usually near the camera) for 2 seconds.";
+      case "NetworkError":
+        return "Tag moved too soon. Keep the card flat against the phone until it buzzes.";
+      case "InvalidStateError":
+        return "NFC is busy. Tap Cancel, wait a second, then try Write again.";
+      case "SecurityError":
+        return "NFC blocked by the browser (needs HTTPS and a top-level Chrome tab).";
+      default:
+        return error.message
+          ? `${error.name}: ${error.message}`
+          : `NFC error (${error.name}).`;
     }
-    if (error.name === "NotSupportedError") {
-      return "NFC not supported on this device or browser.";
-    }
-    if (error.name === "NotReadableError") {
-      return "Could not read the tag. Hold steady and try again.";
-    }
-    if (error.name === "NetworkError") {
-      return "Tag lost. Keep the card against the phone.";
-    }
-    return error.message || error.name;
   }
   if (error instanceof Error) return error.message;
-  return "Something went wrong.";
+  return "Something went wrong with NFC.";
 }

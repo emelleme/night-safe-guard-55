@@ -75,15 +75,16 @@ export function StatusBanner({ status, message, supported }: StatusBannerProps) 
       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${s.dot}`} />
       <p className={`text-sm leading-relaxed ${s.text}`}>
         {!supported
-          ? "Web NFC still needs Chrome on Android with NFC enabled. Barcode scan, image import, and payload drafting can still work here."
+          ? message ||
+            "Web NFC needs Chrome on Android with NFC on, over HTTPS, outside in-app browsers. Barcode scan and drafting still work here."
           : message ||
             (status === "scanning"
-              ? "Hold a card to the back of your phone…"
+              ? "Hold a card flat against the NFC spot (often near the camera)…"
               : status === "barcode-scanning"
                 ? "Point the camera at a barcode or QR code…"
-              : status === "writing"
-                ? "Ready — tap the card to write…"
-                : "")}
+                : status === "writing"
+                  ? "Ready — hold the card still until the phone buzzes…"
+                  : "")}
       </p>
     </div>
   );
