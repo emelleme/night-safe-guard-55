@@ -258,7 +258,7 @@ export function CardCtrlApp() {
 
     setFeedback(
       "writing",
-      "Ready to write — hold the card flat on the NFC spot (often near the camera)…",
+      "Waiting for a tag — hold the card flat on the NFC spot (often near the camera)…",
     );
 
     const payload = {
@@ -267,8 +267,14 @@ export function CardCtrlApp() {
       label: current.label,
     };
 
-    // Fire write immediately under the user gesture
-    void writeCard(payload, { signal: controller.signal })
+    // Fire scan→write immediately under the user gesture (avoids "Tag lost")
+    void writeCard(payload, {
+      signal: controller.signal,
+      onProgress: (msg) => {
+        if (nfcGenerationRef.current !== generation) return;
+        setFeedback("writing", msg);
+      },
+    })
       .then(() => {
         if (nfcGenerationRef.current !== generation) return;
         applyPayload(
@@ -749,7 +755,7 @@ export function CardCtrlApp() {
             {status === "barcode-scanning"
               ? "Keep the code inside the frame or choose an image to decode."
               : status === "writing"
-                ? "Allow NFC if prompted, then hold the tag still for ~2s. Cancel and retry if it stalls."
+                ? "Hold still for 2–3s after the phone detects the tag. We’ll auto-retry if the link blips."
                 : "Keep the card against the NFC spot until you feel the buzz."}
           </p>
         ) : null}

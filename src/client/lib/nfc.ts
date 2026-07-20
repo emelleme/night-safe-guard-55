@@ -405,15 +405,19 @@ export async function scanCard(
 /**
  * Write NDEF to the next tag the user taps.
  *
- * Chrome Android path (call this synchronously from a click handler):
- * 1) Prefer direct `ndef.write()` — waits for tag under the user gesture.
- * 2) If the adapter is busy / InvalidState, fall back to scan→write on reading.
+ * Chrome Android: bare `write()` often throws NetworkError ("Tag lost") when the
+ * RF field drops mid-transfer. The stable path is:
+ *   1) scan() under the user gesture
+ *   2) on first solid `reading`, call write() while the tag is still present
+ *   3) if NetworkError, keep listening and retry on the next reading (up to N times)
+ *
+ * Call this synchronously from a click handler so scan() keeps user activation.
  */
 export async function writeCard(
   payload: CardPayload,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; onProgress?: (msg: string) => void },
 ): Promise<void> {
-  // Build message first (sync) so write() still runs under the gesture
+  // Build message first (sync) so scan() still runs under the gesture
   const message = buildNdefMessage(payload);
 
   const controller = beginOperation(options?.signal);
@@ -422,42 +426,39 @@ export async function writeCard(
   try {
     assertDocumentReadyForNfc();
     const ndef = createNdefReader();
-
-    try {
-      await ndef.write(message, {
-        overwrite: true,
-        signal,
-      });
-      return;
-    } catch (err) {
-      if (isAbortError(err)) throw err;
-
-      // Adapter still held, or some OEM stacks dislike bare write — try write-on-tap
-      if (isRetryableWriteError(err)) {
-        await writeViaScan(ndef, message, signal);
-        return;
-      }
-      throw err;
-    }
+    await writeViaScan(ndef, message, signal, options?.onProgress);
   } finally {
     endOperation(controller);
   }
 }
 
+const MAX_WRITE_ATTEMPTS = 6;
+
 /**
- * Most reliable overwrite path on finicky Android devices:
- * scan for a tag (user already gestured), then write in the reading handler.
+ * Scan until a tag is in the field, then write. Retries "Tag lost" while the
+ * card stays against the phone instead of failing on the first RF blip.
  */
 function writeViaScan(
   ndef: NDEFReader,
   message: NDEFMessageInit,
   signal: AbortSignal,
+  onProgress?: (msg: string) => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
     let writing = false;
+    let attempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearRetry = () => {
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
 
     const cleanup = () => {
+      clearRetry();
       ndef.onreading = null;
       ndef.onreadingerror = null;
       signal.removeEventListener("abort", onAbort);
@@ -480,27 +481,75 @@ function writeViaScan(
     }
     signal.addEventListener("abort", onAbort);
 
-    ndef.onreading = () => {
-      if (writing || settled) return;
-      writing = true;
-      // Fire write immediately while the tag is still in the field
-      ndef
-        .write(message, { overwrite: true, signal })
-        .then(() => settle(() => resolve()))
-        .catch((err) => settle(() => reject(err)));
+    const scheduleRetry = (delayMs: number) => {
+      clearRetry();
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        if (!settled && !writing) {
+          tryWrite();
+        }
+      }, delayMs);
     };
 
+    const tryWrite = () => {
+      if (settled || writing) return;
+      writing = true;
+      clearRetry();
+      attempts += 1;
+
+      onProgress?.(
+        attempts === 1
+          ? "Tag detected — writing… hold still."
+          : `Retrying write (${attempts}/${MAX_WRITE_ATTEMPTS})… keep holding.`,
+      );
+
+      // write() while the tag is still in the field (Chrome-recommended pattern)
+      ndef
+        .write(message, { overwrite: true, signal })
+        .then(() => {
+          settle(() => resolve());
+        })
+        .catch((err: unknown) => {
+          writing = false;
+
+          if (isAbortError(err)) {
+            settle(() => reject(err));
+            return;
+          }
+
+          // RF dropped mid-write — retry shortly; tag often still under the phone
+          if (isTransientFieldError(err) && attempts < MAX_WRITE_ATTEMPTS) {
+            onProgress?.(
+              "Connection blipped. Keep the card flat — retrying automatically…",
+            );
+            // Stagger retries: quick first, then slightly longer
+            scheduleRetry(attempts === 1 ? 180 : 320 + attempts * 80);
+            return;
+          }
+
+          settle(() => reject(err));
+        });
+    };
+
+    ndef.onreading = () => {
+      // Tag just entered / re-entered the field — best moment to write
+      clearRetry();
+      tryWrite();
+    };
+
+    // Do NOT fail the whole op on a single readingerror — common while aligning
     ndef.onreadingerror = () => {
-      if (writing) return;
-      settle(() =>
-        reject(
-          new Error("Could not lock onto the tag. Hold it still against the phone."),
-        ),
+      if (settled || writing) return;
+      onProgress?.(
+        "Almost… slide the card slowly over the NFC area (often near the camera).",
       );
     };
 
+    onProgress?.("Waiting for a tag — hold the card flat against the phone…");
+
+    // Must stay in the user-gesture call stack
     ndef.scan({ signal }).catch((err) => {
-      if (writing) return;
+      if (writing || settled) return;
       settle(() => reject(err));
     });
   });
@@ -518,13 +567,24 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-function isRetryableWriteError(error: unknown): boolean {
-  if (!(error instanceof DOMException)) return false;
-  return (
-    error.name === "InvalidStateError" ||
-    error.name === "NotReadableError" ||
-    /already|progress|scan/i.test(error.message)
-  );
+/** RF blips / tag alignment issues — safe to retry while the user still holds the card. */
+function isTransientFieldError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    if (
+      error.name === "NetworkError" ||
+      error.name === "NotReadableError" ||
+      error.name === "InvalidStateError"
+    ) {
+      return true;
+    }
+    if (/tag lost|networkerror|not readable|invalid state/i.test(error.message)) {
+      return true;
+    }
+  }
+  if (error instanceof Error) {
+    return /tag lost|moved too soon|hold/i.test(error.message);
+  }
+  return false;
 }
 
 export function generateShortCode(length = 8): string {
@@ -605,7 +665,7 @@ export function formatNfcError(error: unknown): string {
       case "NotReadableError":
         return "Couldn’t read/write the tag. Hold it still on the NFC spot (usually near the camera) for 2 seconds.";
       case "NetworkError":
-        return "Tag moved too soon. Keep the card flat against the phone until it buzzes.";
+        return "Tag lost mid-write. Hold the card flat and still on the NFC spot (often near the camera) for a full 2–3 seconds, then try again. Avoid metal cases.";
       case "InvalidStateError":
         return "NFC is busy. Tap Cancel, wait a second, then try Write again.";
       case "SecurityError":
